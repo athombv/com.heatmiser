@@ -269,7 +269,7 @@ function updateDeviceData(callback) {
 
 		// Request updated information
 		neo.info(function (data) {
-			if (data && devices) {
+			if (data && data.devices) {
 
 				// Store new available data for each device
 				data.devices.forEach(function (device) {
