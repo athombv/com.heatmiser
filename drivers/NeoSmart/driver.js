@@ -50,7 +50,7 @@ module.exports.pair = function (socket) {
 	socket.on("list_devices", function (data, callback) {
 
 		// Pairing timeout
-		var timeout = setTimeout(function() {
+		var timeout = setTimeout(function () {
 			return callback(null, []);
 		}, 15000);
 
@@ -269,40 +269,39 @@ function updateDeviceData(callback) {
 
 		// Request updated information
 		neo.info(function (data) {
+			if (data && devices) {
 
-			// Store new available data for each device
-			data.devices.forEach(function (device) {
-				var internal_device = getDevice(generateDeviceID(device.device, device.DEVICE_TYPE), installed_devices);
+				// Store new available data for each device
+				data.devices.forEach(function (device) {
+					var internal_device = getDevice(generateDeviceID(device.device, device.DEVICE_TYPE), installed_devices);
 
-				// Make sure device exists
-				if (internal_device != null) {
+					// Make sure device exists
+					if (internal_device != null) {
 
-					// Check if there is a difference
-					if (internal_device.data.target_temperature != device.CURRENT_SET_TEMPERATURE) {
+						// Check if there is a difference
+						if (internal_device.data.target_temperature != device.CURRENT_SET_TEMPERATURE) {
 
-						// Trigger target temperature changed
-						module.exports.realtime({ id: generateDeviceID(device.device, device.DEVICE_TYPE) }, "target_temperature", device.CURRENT_SET_TEMPERATURE);
+							// Trigger target temperature changed
+							module.exports.realtime({ id: generateDeviceID(device.device, device.DEVICE_TYPE) }, "target_temperature", device.CURRENT_SET_TEMPERATURE);
+						}
+
+						// Check if there is a difference
+						if ((Math.round(internal_device.data.measured_temperature * 10) / 10) != (Math.round(device.CURRENT_TEMPERATURE * 10) / 10)) {
+
+							// Trigger measured temperature changed
+							module.exports.realtime({ id: generateDeviceID(device.device, device.DEVICE_TYPE) }, "measure_temperature", (Math.round(device.CURRENT_TEMPERATURE * 10) / 10));
+						}
+
+						// Update internal data
+						internal_device.name = device.device; // Needed for the set-temperature function. Removed after reboot. Homey only holds IDs of items.
+						internal_device.data = {
+							id: generateDeviceID(device.device, device.DEVICE_TYPE),
+							target_temperature: device.CURRENT_SET_TEMPERATURE,
+							measured_temperature: (Math.round(device.CURRENT_TEMPERATURE * 10) / 10)
+						};
 					}
-
-					// Check if there is a difference
-					if ((Math.round(internal_device.data.measured_temperature * 10) / 10) != (Math.round(device.CURRENT_TEMPERATURE * 10) / 10)) {
-
-						// Trigger measured temperature changed
-						module.exports.realtime({ id: generateDeviceID(device.device, device.DEVICE_TYPE) }, "measure_temperature", (Math.round(device.CURRENT_TEMPERATURE * 10) / 10));
-					}
-
-					// Update internal data
-					internal_device.name = device.device; // Needed for the set-temperature function. Removed after reboot. Homey only holds IDs of items.
-					internal_device.data = {
-						id: generateDeviceID(device.device, device.DEVICE_TYPE),
-						target_temperature: device.CURRENT_SET_TEMPERATURE,
-						measured_temperature: (Math.round(device.CURRENT_TEMPERATURE * 10) / 10)
-					};
-
-					console.log(internal_device);
-				}
-			});
-
+				});
+			}
 			if (callback) callback();
 		});
 	}
