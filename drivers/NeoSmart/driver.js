@@ -1,6 +1,7 @@
 'use strict';
 
 const heatmiser = require('heatmiser');
+const semver = require('semver');
 
 const devices = [];
 let tempDevices = [];
@@ -33,7 +34,7 @@ module.exports.pair = socket => {
 		// Pairing timeout
 		const timeout = setTimeout(() => callback(null, []), 15000);
 
-		const searchBridge = neoBridge || new heatmiser.Neo();
+		const searchBridge = new heatmiser.Neo();
 		searchBridge.on('ready', (host, port, discoveredDevices) => {
 
 			// Clear timeout
@@ -46,6 +47,7 @@ module.exports.pair = socket => {
 					id: generatedDeviceID,
 					name: device.device,
 					data: {
+						pairedWithAppVersion: Homey.manifest.version,
 						id: generatedDeviceID,
 						bridgeIP: host
 					}
@@ -159,6 +161,11 @@ function addDevice(deviceData) {
 	if (!neoBridge) neoBridge = new heatmiser.Neo(deviceData.bridgeIP);
 
 	devices.push(device);
+
+	// Check if device needs to be re-paired
+	if (typeof deviceData.pairedWithAppVersion === 'undefined' || semver.lt(deviceData.pairedWithAppVersion, '1.1.4')) {
+		module.exports.setUnavailable(deviceData, __('re_pair_needed'));
+	}
 
 	// Start listening for changes on target and measured temperature
 	startPolling(deviceData);
