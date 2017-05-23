@@ -1,113 +1,70 @@
 'use strict';
 
-/**
- * Dependencies
- */
-var heatmiser = require('heatmiser');
-var _ = require('underscore');
+const heatmiser = require('heatmiser');
+const semver = require('semver');
 
-/**
- * Arrays used to store devices
- * @type {Array}
- */
-var installed_devices = [];
-var temp_devices = [];
+const devices = [];
+let tempDevices = [];
 
-/**
- * The Heatmiser Neo Smart client
- */
-var neo;
+let neoBridge;
 
 /**
  * Driver start up, re-initialize devices
  * that were already installed before driver
  * shutdown
- * @param devices
+ * @param devicesData
  * @param callback
  */
-module.exports.init = function (devices, callback) {
-
-	console.log("Initialise Heatmiser");
-
-	devices.forEach(function (device) {
-		addDevice(device);
+module.exports.init = (devicesData, callback) => {
+	devicesData.forEach(deviceData => {
+		addDevice(deviceData);
 	});
-
-	neo = new heatmiser.Neo();
-
-	// Start listening for changes on target and measured temperature
-	startPolling();
-
-	// Success
-	callback(null, true);
+	return callback(null, true);
 };
 
 /**
  * Default pairing process
  */
-module.exports.pair = function (socket) {
+module.exports.pair = socket => {
 
-	socket.on("list_devices", function (data, callback) {
+	socket.on('list_devices', (data, callback) => {
+
+		tempDevices = [];
 
 		// Pairing timeout
-		var timeout = setTimeout(function () {
-			return callback(null, []);
-		}, 15000);
+		const timeout = setTimeout(() => callback(null, []), 15000);
 
-		neo = new heatmiser.Neo();
+		const searchBridge = new heatmiser.Neo();
+		searchBridge.on('ready', (host, port, discoveredDevices) => {
 
-		// Found devices
-		neo.on('ready', function (host, port, found_devices) {
 			// Clear timeout
 			clearTimeout(timeout);
-			var devices = [];
-			temp_devices = []; // Clear list of temporary devices before starting new pairing.
 
 			// Check for each device if it is already installed, or should be
-			found_devices.forEach(function (device) {
-				var device_id = generateDeviceID(device.device, device.DEVICE_TYPE);
-
-				// Check if we don't have the same device twice in the devices list
-				if (!getDevice(device_id, devices) && !getDevice(device_id, temp_devices)) {
-
-					// If the device wasn't installed before, add it to the temporary devices list.
-					if (!_.findWhere(installed_devices, { id: device_id })) {
-						temp_devices.push({
-							id: device_id,
-							name: device.device,
-							data: {
-								id: device_id,
-								target_temperature: null, // Needs to be null so that item is directly visible after installation in insights
-								measured_temperature: null // Needs to be null so that item is directly visible after installation in insights
-							}
-						});
-					}
-				}
-			});
-
-			// Loop through all temp_devices (new found devices) and add them to the devices list.
-			var devices_list = [];
-			temp_devices.forEach(function (temp_device) {
-				devices_list.push({
-					id: temp_device.id,
+			discoveredDevices.forEach(device => {
+				const generatedDeviceID = generateDeviceID(device.device, device.DEVICE_TYPE);
+				tempDevices.push({
+					id: generatedDeviceID,
+					name: device.device,
 					data: {
-						id: temp_device.data.id
-					},
-					name: temp_device.name
+						pairedWithAppVersion: Homey.manifest.version,
+						id: generatedDeviceID,
+						bridgeIP: host
+					}
 				});
 			});
 
-			callback(null, devices_list);
+			return callback(null, tempDevices);
 		});
 	});
+};
 
-	socket.on("add_device", function (device, callback) {
+module.exports.added = (deviceData, callback) => {
 
-		// Store device as installed
-		addDevice(getDevice(device.data.id, temp_devices));
+	// Store device as installed
+	addDevice(deviceData);
 
-		if (callback) callback(null, true);
-	});
+	if (callback) callback(null, true);
 };
 
 /**
@@ -117,31 +74,27 @@ module.exports.capabilities = {
 
 	target_temperature: {
 
-		get: function (device, callback) {
-			if (device instanceof Error) return callback(device);
+		get: (deviceData, callback) => {
+			if (deviceData instanceof Error) return callback(deviceData);
 
 			// Retrieve updated data
-			updateDeviceData(function () {
-
-				// Get device data
-				var thermostat = getDevice(device.id, installed_devices);
-				if (!thermostat) return callback(device);
-
-				callback(null, thermostat.data.target_temperature);
+			fetchData(deviceData, () => {
+				const device = getDevice(deviceData);
+				if (!device) return callback(deviceData);
+				return callback(null, device.state.targetTemperature);
 			});
 		},
 
-		set: function (device, temperature, callback) {
-			if (device instanceof Error) return callback(device);
+		set: (deviceData, temperature, callback) => {
+			if (deviceData instanceof Error) return callback(deviceData);
 
 			// Get device data
-			var thermostat = getDevice(device.id, installed_devices);
-			if (!thermostat) return callback(device);
+			const device = getDevice(deviceData);
+			if (!device) return callback(device);
 
 			// Catch faulty trigger and max/min temp
 			if (!temperature) {
-				callback(true, temperature);
-				return false;
+				return callback('missing_temperature_parameter');
 			}
 			else if (temperature < 5) {
 				temperature = 5;
@@ -150,32 +103,27 @@ module.exports.capabilities = {
 				temperature = 35;
 			}
 
-			// Tell thermostat to change the target temperature (Heatmiser can only work with whole numbers)
-			var forDevice = [thermostat.name];
-			neo.setTemperature(Math.round(temperature), forDevice, function (err) {
-
-				console.log(err);
-
-				// Return error/success to front-end
-				if (callback) callback(err, temperature);
+			neoBridge.setTemperature(Math.round(temperature), device.name, err => {
+				if (err) console.log(err);
+				if (callback) return callback(err, temperature);
 			});
 		}
 	},
 
 	measure_temperature: {
 
-		get: function (device, callback) {
-			if (device instanceof Error) return callback(device);
+		get: (deviceData, callback) => {
+			if (deviceData instanceof Error) return callback(deviceData);
 
 			// Retrieve updated data
-			updateDeviceData(function () {
+			fetchData(deviceData, () => {
 
 				// Get device data
-				var thermostat = getDevice(device.id, installed_devices);
-				if (!thermostat) return callback(device);
+				const device = getDevice(deviceData);
+				if (!device) return callback(device);
 
 				// Callback measured temperature
-				callback(null, thermostat.data.measured_temperature);
+				return callback(null, device.state.measureTemperature);
 			});
 		}
 	}
@@ -183,15 +131,14 @@ module.exports.capabilities = {
 
 /**
  * Delete devices internally when users removes one
- * @param device_data
+ * @param deviceData
  */
-module.exports.deleted = function (device_data) {
-
-	// Remove ID from installed devices array
-	for (var x = 0; x < installed_devices.length; x++) {
-		if (installed_devices[x].data.id === device_data.id) {
-			installed_devices.splice(x, 1);
-			break; // break for loop since length has been modified (but we only have to remove one item, so this is ok.
+module.exports.deleted = deviceData => {
+	for (let x = 0; x < devices.length; x++) {
+		if (devices[x].data.id === deviceData.id) {
+			clearInterval(devices[x].pollInterval);
+			devices.splice(x, 1);
+			break;
 		}
 	}
 };
@@ -199,110 +146,88 @@ module.exports.deleted = function (device_data) {
 /**
  * Adds the device to the installed devices list if it's not already on there.
  * If it is initialising (e.g. after reboot of Homey). Set the device id to the correct place.
- * @param deviceIn
+ * @param deviceData
  */
-function addDevice(deviceIn) {
+function addDevice(deviceData) {
 
-	var device_id = null;
-	if (deviceIn.id !== null) {
-		device_id = deviceIn.id;
+	const device = {
+		state: {
+			targetTemperature: null,
+			measureTemperature: null,
+		},
+		data: deviceData,
+	};
 
-		if (typeof deviceIn.data === "undefined" || typeof deviceIn.data.id === "undefined") {
+	if (!neoBridge) neoBridge = new heatmiser.Neo(deviceData.bridgeIP);
 
-			if (typeof deviceIn.data === "undefined") {
-				deviceIn.data = {};
-			}
-			deviceIn.data.id = device_id;
-		}
+	devices.push(device);
+
+	// Check if device needs to be re-paired
+	if (typeof deviceData.pairedWithAppVersion === 'undefined' || semver.lt(deviceData.pairedWithAppVersion, '1.1.4')) {
+		module.exports.setUnavailable(deviceData, __('re_pair_needed'));
 	}
 
-	if (device_id === null) {
-		device_id = generateDeviceID(deviceIn, deviceIn.DEVICE_TYPE);
-	}
-
-	if (!_.findWhere(installed_devices, { id: device_id })) {
-		installed_devices.push(deviceIn);
-	}
+	// Start listening for changes on target and measured temperature
+	startPolling(deviceData);
 }
 
 /**
  * Heatmiser doesn't support realtime, therefore we have to poll
  * for changes considering the measured and target temperature
  */
-function startPolling() {
-
-	// Poll every 15 seconds
-	setInterval(function () {
-
-		// Update device data
-		updateDeviceData();
-
+function startPolling(deviceData) {
+	const device = getDevice(deviceData);
+	device.pollInterval = setInterval(() => {
+		fetchData(deviceData);
 	}, 15000);
 }
 
 /**
  * Gets the device from the given list
- * @param device_id
+ * @param deviceData
  * @returns {*}
  */
-function getDevice(device_id, list) {
-	var devices = list ? list : installed_devices;
-
+function getDevice(deviceData) {
 	if (devices.length > 0) {
-		for (var x = 0; x < devices.length; x++) {
-			if (devices[x].data.id === device_id) {
+		for (let x = 0; x < devices.length; x++) {
+			if (devices[x].data.id === deviceData.id) {
 				return devices[x];
 			}
 		}
-	}
-};
+	} else return null;
+}
 
 /**
- * Request new information from neo and update
+ * Request new information from neoBridge and update
  * it internally
  * @param callback
  */
-function updateDeviceData(callback) {
+function fetchData(deviceData, callback) {
 
 	// Make sure driver properly started
-	if (neo) {
+	if (neoBridge && deviceData) {
 
 		// Request updated information
-		neo.info(function (data) {
-			if (data && data.devices) {
+		neoBridge.info(data => {
+			if (data && Array.isArray(data.devices)) {
+				data.devices.forEach(hubDevice => {
 
-				// Store new available data for each device
-				data.devices.forEach(function (device) {
-					var internal_device = getDevice(generateDeviceID(device.device, device.DEVICE_TYPE), installed_devices);
+					const device = getDevice({ id: generateDeviceID(hubDevice.device, hubDevice.DEVICE_TYPE) });
 
-					// Make sure device exists
-					if (internal_device != null) {
+					// Skip all devices which are not the device within the current scope
+					if (device && generateDeviceID(hubDevice.device, hubDevice.DEVICE_TYPE) === deviceData.id) {
 
-						// Check if there is a difference
-						if (internal_device.data.target_temperature != device.CURRENT_SET_TEMPERATURE) {
-
-							// Trigger target temperature changed
-							module.exports.realtime({ id: generateDeviceID(device.device, device.DEVICE_TYPE) }, "target_temperature", device.CURRENT_SET_TEMPERATURE);
-						}
-
-						// Check if there is a difference
-						if ((Math.round(internal_device.data.measured_temperature * 10) / 10) != (Math.round(device.CURRENT_TEMPERATURE * 10) / 10)) {
-
-							// Trigger measured temperature changed
-							module.exports.realtime({ id: generateDeviceID(device.device, device.DEVICE_TYPE) }, "measure_temperature", (Math.round(device.CURRENT_TEMPERATURE * 10) / 10));
-						}
+						module.exports.realtime(deviceData, 'target_temperature', hubDevice.CURRENT_SET_TEMPERATURE);
+						module.exports.realtime(deviceData, 'measure_temperature', (Math.round(hubDevice.CURRENT_TEMPERATURE * 10) / 10));
 
 						// Update internal data
-						internal_device.name = device.device; // Needed for the set-temperature function. Removed after reboot. Homey only holds IDs of items.
-						internal_device.data = {
-							id: generateDeviceID(device.device, device.DEVICE_TYPE),
-							target_temperature: device.CURRENT_SET_TEMPERATURE,
-							measured_temperature: (Math.round(device.CURRENT_TEMPERATURE * 10) / 10)
-						};
+						device.name = hubDevice.device; // Needed for the set-temperature function. Removed after reboot. Homey only holds IDs of items.
+						device.state.targetTemperature = hubDevice.CURRENT_SET_TEMPERATURE;
+						device.state.measureTemperature = (Math.round(hubDevice.CURRENT_TEMPERATURE * 10) / 10);
 					}
 				});
 			}
-			if (callback) callback();
+			if (callback) return callback();
 		});
 	}
 }
