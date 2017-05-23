@@ -217,12 +217,8 @@ function fetchData(deviceData, callback) {
 					// Skip all devices which are not the device within the current scope
 					if (device && generateDeviceID(hubDevice.device, hubDevice.DEVICE_TYPE) === deviceData.id) {
 
-						if (device.state.targetTemperature !== hubDevice.CURRENT_SET_TEMPERATURE) {
-							module.exports.realtime(deviceData, 'target_temperature', hubDevice.CURRENT_SET_TEMPERATURE);
-						}
-						if ((Math.round(device.state.measureTemperature * 10) / 10) !== (Math.round(hubDevice.CURRENT_TEMPERATURE * 10) / 10)) {
-							module.exports.realtime(deviceData, 'measure_temperature', (Math.round(hubDevice.CURRENT_TEMPERATURE * 10) / 10));
-						}
+						module.exports.realtime(deviceData, 'target_temperature', hubDevice.CURRENT_SET_TEMPERATURE);
+						module.exports.realtime(deviceData, 'measure_temperature', (Math.round(hubDevice.CURRENT_TEMPERATURE * 10) / 10));
 
 						// Update internal data
 						device.name = hubDevice.device; // Needed for the set-temperature function. Removed after reboot. Homey only holds IDs of items.
